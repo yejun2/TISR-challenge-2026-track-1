@@ -1,115 +1,231 @@
-# TISR-challenge-2026-track-1
-TISR challenge 2026 track 1 9th place
+# TISR Challenge 2026 Track 1
 
-## 2. 주요 실험 정리
+This repository contains the experimental code used for **Track 1 of the PBVS @ CVPR 2026 Thermal Image Super-Resolution Challenge**.
 
-| 실험 | 관련 파일 | 설명 |
-| --- | --- | --- |
-| 기본 x8 finetune | `options/train/train_coslr_multiloss_multiscale_DRCT-L_SRx8_finetune_from_merged.yml` | mixed pretrain 가중치에서 시작해 공식 train/val 데이터로 x8 복원 성능을 finetune |
-| mixed pretrain 데이터 생성 | `utils/merge_image.py` | 서로 다른 샘플 4개를 crop 후 합성해 `LR_x8_mix_pretrain`, `GT_mix_pretrain` 생성 |
-| masking 실험 | `options/train/train_finetune_use_masking.yml`, `options/train/train_finetune_use_masking_paired.yml` | LQ 이미지에만 patch masking을 적용하는 augmentation 실험 |
-| paired dataset 정리 | `drct/data/thermal_paired_dataset.py` | thermal 전용 paired loader, masking, HP feature 결합 로직 추가 |
-| HP feature 5채널 입력 | `options/train/finetune_use_hp_feat.yml` | thermal 3채널 + HP 2채널을 합쳐 5채널 입력으로 사용 |
-| pseudo x2 intermediate 학습 | `options/train/finetune_x2_from_opencv_pretrained.yml` | `LR_x8`을 입력으로 `LR_x2`를 맞추는 중간 단계 학습 |
-| depth 관련 실험 흔적 | `options/train/finetune_use_depth_anything.yml` | depth 조건부 입력 실험용 설정이 있으나 현재 체크인된 yml에서는 `false`로 비활성화 상태 |
-| 커스텀 loss | `drct/losses/multi_loss.py` | MSE와 SSIM을 결합한 loss 사용 |
+The task is to reconstruct an 8× super-resolved thermal image from a single low-resolution input. The codebase is built on top of DRCT and includes modifications to the loss functions, dataset pipeline, input representation, and training strategy.
 
-## 3. 폴더 구조
+## Result
 
-아래 폴더들이 이 저장소에서 핵심입니다.
+- Team/User: `junjun`
+- Submission ID: `582110`
+- Submission time: `2026-03-01 21:07`
+- Score: `28.49`
+- SSIM: `0.8445`
+- Rank: **9th**
+
+## Overview
+
+This project investigates several modifications to a DRCT-based thermal image super-resolution model, with a particular focus on preserving structural information in thermal imagery.
+
+The main experiments include:
+
+- An MSE and SSIM-based training objective
+- A paired dataset loader for thermal GT/LQ images
+- Patch masking augmentation applied only to low-resolution inputs
+- Mixed pretraining data generation
+- Intermediate supervision using an `LR_x8 → LR_x2 → GT` pipeline
+- A 5-channel input using additional high-pass features
+- An experimental depth-conditioning branch based on Depth Anything
+
+In the current checked-in version, depth conditioning is disabled. Therefore, the depth-related code should be regarded as an experimental branch rather than the final submission configuration.
+
+## Main Changes
+
+### SSIM-based MultiLoss
+
+Relevant files:
 
 ```text
-PBVS_TSR/
-├── drct/
-│   ├── archs/                  # DRCT 아키텍처 및 커스텀 변형
-│   ├── data/                   # thermal paired dataset, masking, HP feature loader
-│   ├── losses/                 # MultiLoss, SSIMLoss
-│   └── train.py / test.py
-├── options/
-│   ├── train/                  # 실험별 학습 설정
-│   └── test/                   # 추론/평가 설정
-├── utils/
-│   ├── merge_image.py          # mixed pretrain 데이터 생성
-│   ├── downsample2x.py         # LR_x2 생성용 다운샘플링
-│   ├── post_processing.py      # 후처리 실험 스크립트
-│   └── fuzzy_images.py         # 추가 이미지 조작/노이즈 실험
-├── datasets/track1/            # 대회 데이터셋 및 파생 데이터
-├── results/                    # 추론 결과
-├── tb_logger/                  # TensorBoard 로그
-├── Visualization/              # 시각화 노트북
-└── BasicSR/                    # 기반 프레임워크 소스
+drct/losses/multi_loss.py
+drct/losses/__init__.py
 ```
 
-## 4. 환경 설정
+A Gaussian-window-based SSIM loss was implemented to complement pixel-wise reconstruction loss with structural similarity.
 
-기본 README 기준 환경은 아래와 같습니다.
+The final objective is defined as:
 
-- Python 3.8
-- PyTorch 1.12.1
-- CUDA 11.6
+```text
+MultiLoss = MSE + 0.02 × SSIMLoss
+```
 
-예시 설치 순서:
+`SSIMLoss` is computed as `1 - SSIM`.
+
+The implementation also handles model outputs in list, tuple, or dictionary form by selecting the final output or the `x8` output when available.
+
+If the spatial size of the prediction differs from that of the target, the target is resized before computing the loss.
+
+### Thermal Paired Dataset
+
+Relevant file:
+
+```text
+drct/data/thermal_paired_dataset.py
+```
+
+A paired dataset loader was implemented to reliably match thermal GT and LQ images and support the experimental training pipeline.
+
+Main features include:
+
+- GT/LQ pairing based on filename stem
+- Paired random cropping
+- LQ-only patch masking
+- Loading HP features and concatenating them with the thermal input
+- Padding and spatial alignment during validation and testing
+
+The current implementation includes support for HP feature inputs, while direct depth-map concatenation is not enabled in the checked-in version.
+
+### Mixed Pretraining Data
+
+Relevant file:
+
+```text
+utils/merge_image.py
+```
+
+The script creates mixed pretraining samples by cropping and combining regions from multiple thermal images.
 
 ```bash
-conda create -n pbvs_tsr python=3.8 -y
-conda activate pbvs_tsr
-conda install pytorch==1.12.1 torchvision==0.13.1 torchaudio==0.12.1 cudatoolkit=11.6 -c pytorch -c conda-forge
-cd /SSD4/vipnu/PBVS_TSR
-pip install -r requirements.txt
-python setup.py develop
+python utils/merge_image.py
 ```
 
-## 5. 데이터 준비
+Generated samples are stored in:
 
-기본적으로는 공식 Track 1 thermal 데이터가 아래 구조로 들어가야 합니다.
+```text
+datasets/track1/thermal/train/LR_x8_mix_pretrain
+datasets/track1/thermal/train/GT_mix_pretrain
+```
+
+### Input Masking
+
+Patch masking is applied to the low-resolution input to evaluate whether the model can recover missing or degraded local regions.
+
+Relevant configurations:
+
+```text
+options/train/train_finetune_use_masking.yml
+options/train/train_finetune_use_masking_paired.yml
+```
+
+### HP Feature Input
+
+A 5-channel input setting was tested by concatenating thermal images with separately extracted high-pass features.
+
+Relevant configuration:
+
+```text
+options/train/finetune_use_hp_feat.yml
+```
+
+Training script:
+
+```text
+train_hp.sh
+```
+
+### Intermediate Supervision
+
+In addition to directly reconstructing GT from `LR_x8`, a two-stage training pipeline was explored using an intermediate `LR_x2` target.
+
+```text
+LR_x8 → LR_x2 → GT
+```
+
+The `LR_x2` data can be generated using:
+
+```bash
+python utils/downsample2x.py <input_dir> <output_dir>
+```
+
+Relevant configuration:
+
+```text
+options/train/finetune_x2_from_opencv_pretrained.yml
+```
+
+Training script:
+
+```text
+train_x2_opencv.sh
+```
+
+## Experiment Configurations
+
+| Experiment | Configuration | Description |
+|---|---|---|
+| Mixed pretraining | `utils/merge_image.py` | Generates mixed thermal samples for pretraining |
+| Base x8 finetuning | `train_coslr_multiloss_multiscale_DRCT-L_SRx8_finetune_from_merged.yml` | Finetunes on the official training split after mixed pretraining |
+| Input masking | `train_finetune_use_masking.yml` | Applies patch masking to LQ inputs |
+| Masking with paired loader | `train_finetune_use_masking_paired.yml` | Combines masking with the paired thermal loader |
+| Paired thermal loader | `train_finetune_from_paired_dataset.yml` | Uses the custom GT/LQ pairing pipeline |
+| HP 5-channel input | `finetune_use_hp_feat.yml` | Concatenates thermal input with HP features |
+| Intermediate x2 supervision | `finetune_x2_from_opencv_pretrained.yml` | Uses an `LR_x8 → LR_x2 → GT` training pipeline |
+| Depth experiment | `finetune_use_depth_anything.yml` | Experimental depth-conditioning configuration |
+
+## Depth Experiment
+
+`train_depth_anything.sh` runs the following configuration:
+
+```bash
+CUDA_VISIBLE_DEVICES=6,7 python -m torch.distributed.launch \
+  --nproc_per_node=2 \
+  --master_port=29522 \
+  drct/train.py \
+  -opt options/train/finetune_use_depth_anything.yml \
+  --launcher pytorch
+```
+
+However, the current `finetune_use_depth_anything.yml` disables depth conditioning:
+
+```text
+use_depth: false
+use_depth_cond: false
+```
+
+Therefore, running the current configuration does not use depth maps as model inputs.
+
+Depth Anything-based conditioning was explored during development, but the active depth-enabled configuration is not included in the current repository state.
+
+## Dataset Structure
+
+The basic dataset layout is:
 
 ```text
 datasets/
 └── track1/
     ├── thermal/
     │   ├── train/
-    │   │   ├── GT
-    │   │   └── LR_x8
+    │   │   ├── GT/
+    │   │   └── LR_x8/
     │   ├── val/
-    │   │   ├── GT
-    │   │   └── LR_x8
+    │   │   ├── GT/
+    │   │   └── LR_x8/
     │   └── test/
-    │       └── sisr_x8
+    │       └── sisr_x8/
     └── depth/
-        ├── train
-        └── val
+        ├── train/
+        └── val/
 ```
 
-실험에 따라 아래 파생 폴더들도 사용합니다.
+Additional derived data used in some experiments:
 
-- `datasets/track1/thermal/train/LR_x8_mix_pretrain`
-- `datasets/track1/thermal/train/GT_mix_pretrain`
-- `datasets/track1/thermal/train/LR_x2`
-- `datasets/track1/thermal/val/LR_x2`
-- `datasets/track1/thermal/train/HP_feats`
-- `datasets/track1/thermal/val/HP_feats`
-
-### mixed pretrain 데이터 생성
-
-```bash
-python utils/merge_image.py
+```text
+datasets/track1/thermal/train/LR_x8_mix_pretrain
+datasets/track1/thermal/train/GT_mix_pretrain
+datasets/track1/thermal/train/LR_x2
+datasets/track1/thermal/val/LR_x2
+datasets/track1/thermal/train/HP_feats
+datasets/track1/thermal/val/HP_feats
 ```
 
-이 스크립트는 `train/LR_x8`, `train/GT`를 바탕으로 합성 샘플을 만들어 pretrain용 mixed dataset을 생성합니다.
+## Training
 
-### LR_x2 생성
+A representative training configuration is:
 
-```bash
-python utils/downsample2x.py <input_dir> <output_dir>
+```text
+options/train/train_coslr_multiloss_multiscale_DRCT-L_SRx8_finetune_from_merged.yml
 ```
 
-예를 들어 `GT`를 2배 다운샘플해서 `LR_x2`를 만들 때 사용할 수 있습니다.
-
-## 6. 학습
-
-대표 학습 명령은 아래와 같습니다.
-
-### 기본 finetune
+Example command:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch \
@@ -120,99 +236,77 @@ CUDA_VISIBLE_DEVICES=0,1 python -m torch.distributed.launch \
   --launcher pytorch
 ```
 
-### 저장된 실험용 쉘 스크립트
+Main training scripts:
 
-```bash
-bash train_masking.sh
-bash train_paired.sh
-bash train_hp.sh
-bash train_x2_opencv.sh
-bash train_depth_anything.sh
+```text
+train_depth_anything.sh
+train_hp.sh
+train_masking.sh
+train_paired.sh
+train_x2_opencv.sh
 ```
 
-각 스크립트의 의미는 다음과 같습니다.
+## Inference
 
-- `train_masking.sh`: masking + paired loader 기반 실험
-- `train_paired.sh`: thermal paired dataset 기반 finetune
-- `train_hp.sh`: HP feature 5채널 입력 실험
-- `train_x2_opencv.sh`: `LR_x8 -> LR_x2` intermediate 학습
-- `train_depth_anything.sh`: depth 관련 실험용 실행 스크립트
-
-학습 결과물은 보통 `experiments/`와 `tb_logger/` 아래에 저장됩니다.
-
-## 7. 추론과 테스트
-
-기본 테스트 엔트리는 아래와 같습니다.
+Run inference with:
 
 ```bash
-python drct/test.py -opt options/test/test_DRCT-L_SRx8_finetune_from_merged.yml
-# 또는
+python drct/test.py \
+  -opt options/test/test_DRCT-L_SRx8_finetune_from_merged.yml
+```
+
+or:
+
+```bash
 bash test.sh
 ```
 
-현재 체크인된 `options/test/test_DRCT-L_SRx8_finetune_from_merged.yml`은 다음 특징이 있습니다.
+Some test configurations still contain absolute paths from the original server environment. Dataset, checkpoint, and output paths may need to be updated before running the code elsewhere.
 
-- 입력 경로가 절대 경로로 고정되어 있음
-- `results/test_x8tox2_archived_20260227_165001/visualization/thermal`를 입력으로 사용
-- `experiments/pretrained_models/x4_pretrained_opencv.pth`를 읽어 최종 복원 수행
+## Project Structure
 
-즉, 현재 설정은 단일 x8 모델보다는 `x8 -> x2 -> GT` 2-stage 흐름에 가깝습니다.  
-다른 환경에서 재현할 때는 입력 경로와 체크포인트 경로를 반드시 다시 맞춰야 합니다.
+```text
+PBVS_TSR/
+├── drct/
+│   ├── archs/
+│   ├── data/
+│   ├── losses/
+│   ├── train.py
+│   └── test.py
+├── options/
+│   ├── train/
+│   └── test/
+├── utils/
+│   ├── merge_image.py
+│   ├── downsample2x.py
+│   ├── post_processing.py
+│   └── fuzzy_images.py
+├── datasets/
+│   └── track1/
+├── results/
+├── tb_logger/
+├── Visualization/
+└── BasicSR/
+```
 
-추론 결과는 `results/` 아래에 저장됩니다.
+## Personal Contributions
 
-## 8. 코드 수정 포인트
+The main contributions in this repository include:
 
-이 저장소에서 대회용으로 손댄 핵심 포인트는 아래 파일들입니다.
+- Implementing a Gaussian-window-based SSIM loss
+- Combining MSE and SSIM into a custom MultiLoss
+- Implementing a paired thermal GT/LQ dataset loader
+- Applying LQ-only patch masking augmentation
+- Generating mixed pretraining samples
+- Testing 5-channel inputs with HP features
+- Exploring `LR_x8 → LR_x2 → GT` intermediate supervision
+- Investigating a Depth Anything-based conditioning branch
+- Organizing training and evaluation configurations
 
-- `drct/data/thermal_paired_dataset.py`
-  thermal 전용 paired loader, masking, HP feature 결합
-- `drct/losses/multi_loss.py`
-  MSE + SSIM 결합 loss
-- `options/train/*.yml`
-  실험별 하이퍼파라미터와 데이터 경로
-- `utils/merge_image.py`
-  mixed pretrain 데이터 생성
-- `utils/downsample2x.py`
-  intermediate supervision용 `LR_x2` 생성
+## Acknowledgements
 
-## 9. 남아 있는 산출물
-
-이 폴더에는 코드만 있는 것이 아니라 실제 실험 산출물도 함께 남아 있습니다.
-
-- `datasets/track1/`: 대회 데이터 일부 및 파생 데이터
-- `tb_logger/`: 학습 로그
-- `results/`: 추론 결과 이미지
-- `Visualization/`: 분석용 노트북
-
-정리용 저장소로 다시 다듬을 계획이라면, 나중에 아래처럼 분리하는 것도 좋습니다.
-
-- `code/`: 재현 가능한 학습/추론 코드
-- `configs/`: 최종 사용한 설정만 정리
-- `assets/`: README용 이미지
-- `logs/` 또는 별도 스토리지: 대용량 실험 산출물
-
-## 10. 주의할 점
-
-- 일부 옵션 파일은 절대 경로를 사용합니다.
-- 체크포인트 파일 이름이 `pretrained_model.pth`, `pretrain_model.pth`, `x4_pretrained_opencv.pth`처럼 실험별로 다릅니다.
-- depth 관련 실험 코드는 남아 있지만, 현재 yml만 보면 실제 활성화 여부는 다시 확인이 필요합니다.
-- 저장소 안에 데이터와 로그가 같이 포함되어 있어, 외부 공유용 README와 개인 실험 폴더 README의 목적이 조금 다를 수 있습니다.
-
-## 11. Acknowledgements
-
-이 코드베이스는 아래 프로젝트들의 도움을 크게 받았습니다.
+This project builds on the following open-source repositories:
 
 - [DRCT](https://github.com/ming053l/DRCT)
-- [TISR](https://github.com/upczww/TISR/tree/master)
 - [BasicSR](https://github.com/XPixelGroup/BasicSR)
-
----
-
-이 README는 현재 폴더에 남아 있는 코드와 설정 파일을 기준으로 정리한 1차 문서입니다.  
-추가로 아래 정보까지 넣으면 포트폴리오용 README로 훨씬 좋아집니다.
-
-- 최종 제출 모델이 무엇이었는지
-- 성능 비교 표 또는 리더보드 결과
-- 어떤 실험이 실제로 유효했고 무엇을 버렸는지
-- 대회에서 맡았던 역할과 구현 기여도
+- [TISR](https://github.com/upczww/TISR)
